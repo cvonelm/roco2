@@ -5,6 +5,13 @@
 
 #include <roco2/chrono/util.hpp>
 
+#ifdef __x86_64__
+#include <firestarter/Environment/X86/X86Environment.hpp>
+#elif __aarch64__
+#include <firestarter/Environment/AArch64/AArch64Environment.cpp>
+#else
+#error "roco2 not implemented for this architecture!"
+#endif
 namespace roco2
 {
 namespace kernels
@@ -25,12 +32,12 @@ namespace kernels
 
     private:
         void run_kernel(roco2::chrono::time_point until) override;
-
-        int (*firestarter_function_)(void*);
-        int (*firestarter_init_)(void*);
-        int base_function_;
-
-        const static param_type loop_count = 10000;
+#ifdef __x86_64__
+        ::firestarter::environment::x86::X86Environment env;
+#elif __aarch64__
+        ::firestarter::environment::aarch64::AArch64Environment env;
+#endif
+        long long unsigned int loadVar;
     };
 }
 }

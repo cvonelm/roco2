@@ -4,4 +4,4 @@
 [submodule "lib/FIRESTARTER"]
 	path = lib/FIRESTARTER
 	url = https://github.com/tud-zih-energy/FIRESTARTER.git
-	branch = roco2
+	branch = separate_into_library

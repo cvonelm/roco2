@@ -1,15 +1,10 @@
 #include <roco2/kernels/firestarter.hpp>
 #include <roco2/memory/thread_local.hpp>
 #include <roco2/metrics/utility.hpp>
-
+#include <roco2/cpu/affinity.hpp>
 #include <roco2/scorep.hpp>
 
 #include <cassert>
-
-extern "C"
-{
-#include <firestarter.h>
-}
 
 namespace roco2
 {
@@ -18,61 +13,78 @@ namespace kernels
 
     firestarter::firestarter()
     {
-        base_function_ = select_base_function();
+        env.evaluateCpuAffinity(0, "");
+        env.evaluateFunctions();
+        env.selectFunction(0, false);
+        env.printSelectedCodePathSummary();
 
-        assert(base_function_ != FUNC_UNKNOWN);
+        loadVar = LOAD_HIGH;
 
-        firestarter_init_ = reinterpret_cast<int (*)(void*)>(get_init_function(base_function_, 2));
-        firestarter_function_ =
-            reinterpret_cast<int (*)(void*)>(get_working_function(base_function_, 2));
+        roco2::thread_local_memory().lwd = std::make_unique<::firestarter::LoadWorkerData>( cpu::info::current_thread(), env, &loadVar, 0, false, false);
+    }
 
-        assert(firestarter_init_ != nullptr);
-        assert(firestarter_function_ != nullptr);
-
-        auto mem_size = get_memory_size(base_function_, 2);
-        (void)mem_size;
-
-        auto& my_mem_buffer = roco2::thread_local_memory().firestarter_buffer;
-
-        assert(mem_size / sizeof(double) <= my_mem_buffer.size());
-
-        threaddata_t data;
-
-        data.addrMem = reinterpret_cast<param_type>(my_mem_buffer.data());
-
-        firestarter_init_(&data);
+    static void stop(roco2::chrono::time_point until, long long unsigned int*loadVar)
+    {
+        std::this_thread::sleep_for(until - std::chrono::high_resolution_clock::now());
+        *loadVar = LOAD_STOP;
     }
 
     void firestarter::run_kernel(roco2::chrono::time_point until)
     {
+        std::thread cntrl_thread;
+        if(cpu::info::current_thread() == 0)
+        {
+            cntrl_thread = std::thread(stop, until, &loadVar);
+        }
+
 #ifdef HAS_SCOREP
         SCOREP_USER_REGION("firestarter_kernel", SCOREP_USER_REGION_TYPE_FUNCTION)
 #endif
+        auto&my_mem_buffer = roco2::thread_local_memory().firestarter_buffer;
 
-        assert(firestarter_function_);
+        auto& lwd = roco2::thread_local_memory().lwd;
 
-        auto& my_mem_buffer = roco2::thread_local_memory().firestarter_buffer;
+        lwd->environment().setCpuAffinity(lwd->id());
+        lwd->config().payload().compilePayload(
+            lwd->config().payloadSettings(), lwd->config().instructionCacheSize(),
+            lwd->config().dataCacheBufferSize(), lwd->config().ramBufferSize(),
+            lwd->config().thread(), lwd->config().lines(), lwd->dumpRegisters,
+            lwd->errorDetection);
+
+        auto dataCacheSizeIt =
+            lwd->config().platformConfig().dataCacheBufferSize().begin();
+
+        auto ramBufferSize = lwd->config().platformConfig().ramBufferSize();
+
+        lwd->buffersizeMem = (*dataCacheSizeIt + *std::next(dataCacheSizeIt, 1) +
+            *std::next(dataCacheSizeIt, 2) + ramBufferSize) /
+            lwd->config().thread() / sizeof(unsigned long long);
+
+        roco2::thread_local_memory().create_firestarter_buffer(lwd->buffersizeMem);
+        lwd->addrMem = roco2::thread_local_memory().firestarter_buffer.data() + lwd->addrOffset;
+
+        lwd->config().payload().init(lwd->addrMem, lwd->buffersizeMem);
 
         // check alignment requirements
-        assert(reinterpret_cast<param_type>(my_mem_buffer.data()) % 32 == 0);
-
-        threaddata_t data;
-        data.addrMem = reinterpret_cast<param_type>(my_mem_buffer.data());
-        data.addrHigh = loop_count;
+        assert(reinterpret_cast<param_type>(my_mem_buffer.data()) % 64 == 0);
 
         std::size_t loops = 0;
-
         do
         {
 #ifdef HAS_SCOREP
             // SCOREP_USER_REGION("firestarter_kernel_loop", SCOREP_USER_REGION_TYPE_FUNCTION)
 #endif
-            firestarter_function_(&data);
+            lwd->iterations = lwd->config().payload().highLoadFunction(
+            lwd->addrMem, lwd->addrHigh, lwd->iterations);
+            lwd->config().payload().lowLoadFunction(lwd->addrHigh, lwd->period);
 
-            loops++;
         } while (std::chrono::high_resolution_clock::now() < until);
 
         roco2::metrics::utility::instance().write(loops);
+        if(cpu::info::current_thread() == 0)
+        {
+            cntrl_thread.join();
+        }
     }
 } // namespace kernels
 } // namespace roco2

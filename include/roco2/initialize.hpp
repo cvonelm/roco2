@@ -72,6 +72,7 @@ public:
         }
 
         log::debug() << "Checking affinity of thread to correct cpu";
+        cpu::affinity::set(cpu::info::current_thread() );
         if (cpu::info::current_cpu() != cpu::info::current_thread())
         {
             raise("Thread ", cpu::info::current_thread(),

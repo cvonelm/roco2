@@ -21,8 +21,6 @@ add_library(roco2_core STATIC ${roco2_core_SOURCES})
 target_link_libraries(roco2_core PUBLIC roco2)
 if (USE_FIRESTARTER)
     target_compile_definitions(roco2_core PUBLIC "HAS_FIRESTARTER")
-    target_link_libraries(roco2_core PUBLIC firestarter)
-    add_dependencies(roco2_core libfirestarter)
 endif()
 if (USE_SCOREP)
     option(ROCO2_HIGHLOW_INSTRUMENT_PHASES "instrument the individual high & low phases of the high-low-kernel" OFF)
@@ -32,7 +30,7 @@ if (USE_SCOREP)
 endif()
 
 add_library(roco2_main STATIC main.cpp)
-target_link_libraries(roco2_main PUBLIC roco2)
+target_link_libraries(roco2_main PUBLIC roco2 Nitro::log Nitro::env)
 
 add_subdirectory(configurations)
 
